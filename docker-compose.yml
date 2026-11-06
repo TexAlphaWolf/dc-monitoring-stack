@@ -62,7 +62,7 @@ services:
 
   node-exporter:
     <<: *hardening
-    image: prom/node-exporter:v1.11.1
+    image: prom/node-exporter:v1.12.1
     command:
       - --path.rootfs=/host
       - --path.procfs=/host/proc
