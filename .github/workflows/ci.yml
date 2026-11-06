@@ -62,6 +62,6 @@ jobs:
           set -a; . ./.env; set +a
           python tools/check_stack.py --webhook http://127.0.0.1:8080 --skip windows
       - name: Every dashboard query runs and returns data
-        run: python tools/check_dashboards.py --require node,cadvisor,probes
+        run: python tools/check_dashboards.py --require node,cadvisor,probes --wait 300
       - if: failure()
         run: docker compose -f docker-compose.yml -f docker-compose.ci.yml logs --no-color | tail -200

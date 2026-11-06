@@ -1,10 +1,12 @@
 """Run every dashboard query against a live Prometheus.
 
     python tools/check_dashboards.py [--prometheus URL] [--require node,cadvisor,probes,windows]
+                                     [--wait SECONDS]
 
 A query that Prometheus rejects always fails. With --require, a query on metrics of a listed
 group (node, windows, cadvisor, probes) must also return data, so a dashboard that silently
-shows "No data" is caught. Standard library only.
+shows "No data" is caught. --wait keeps retrying while queries are still empty, because rates and
+recording rules need a few minutes of samples on a freshly started stack. Standard library only.
 """
 
 from __future__ import annotations
@@ -13,6 +15,7 @@ import argparse
 import json
 import re
 import sys
+import time
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -25,7 +28,13 @@ GROUPS = {
     "probes": ("probe_",),
 }
 # Metrics that legitimately have no series on many machines.
-OPTIONAL = ("hwmon", "ALERTS", "ssl_earliest_cert_expiry", "http_status_code")
+OPTIONAL = (
+    "hwmon",
+    "ALERTS",
+    "ssl_earliest_cert_expiry",
+    "http_status_code",
+    "container_spec_memory_limit_bytes",  # only containers with a memory limit have it
+)
 SUBSTITUTIONS = {
     "$__rate_interval": "2m",
     "$__range": "1h",
@@ -57,11 +66,50 @@ def queries(path: Path):
             yield panel["title"], target["expr"], False
 
 
+def run_once(base: str, prefixes: tuple[str, ...]) -> tuple[list[str], list[str], int]:
+    """Check every query once; returns (rejected, empty, total) with printable messages."""
+    rejected: list[str] = []
+    empty: list[str] = []
+    total = 0
+    for path in sorted(DASHBOARDS.glob("*.json")):
+        for title, expr, is_variable in queries(path):
+            total += 1
+            try:
+                if is_variable:
+                    match = LABEL_VALUES.match(expr)
+                    if match is None:
+                        raise ValueError(f"unsupported variable query: {expr}")
+                    reply = api(
+                        base, f"label/{match['label']}/values", **{"match[]": match["metric"]}
+                    )
+                    result = reply["data"]
+                else:
+                    reply = api(base, "query", query=expand(expr))
+                    result = reply["data"]["result"]
+            except Exception as error:  # noqa: BLE001 - report every failing query
+                rejected.append(f"FAIL {path.name} / {title}: {error}\n     {expr}")
+                continue
+            needs_data = (
+                prefixes
+                and any(prefix in expr for prefix in prefixes)
+                and not any(word in expr for word in OPTIONAL)
+            )
+            if needs_data and not result:
+                empty.append(f"EMPTY {path.name} / {title}\n     {expr}")
+    return rejected, empty, total
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--prometheus", default="http://127.0.0.1:9090")
     parser.add_argument(
         "--require", default="", help="comma separated: node,windows,cadvisor,probes"
+    )
+    parser.add_argument(
+        "--wait",
+        type=int,
+        default=0,
+        help="seconds to keep retrying while required queries are still empty",
     )
     args = parser.parse_args()
     required = {g for g in args.require.split(",") if g}
@@ -70,41 +118,19 @@ def main() -> int:
         parser.error(f"unknown group(s): {', '.join(sorted(unknown))}")
     prefixes = tuple(p for g in required for p in GROUPS[g])
 
-    failures = 0
-    total = 0
-    for path in sorted(DASHBOARDS.glob("*.json")):
-        count = 0
-        for title, expr, is_variable in queries(path):
-            count += 1
-            total += 1
-            try:
-                if is_variable:
-                    match = LABEL_VALUES.match(expr)
-                    if match is None:
-                        raise ValueError(f"unsupported variable query: {expr}")
-                    reply = api(
-                        args.prometheus,
-                        f"label/{match['label']}/values",
-                        **{"match[]": match["metric"]},
-                    )
-                    result = reply["data"]
-                else:
-                    reply = api(args.prometheus, "query", query=expand(expr))
-                    result = reply["data"]["result"]
-            except Exception as error:  # noqa: BLE001 - report every failing query
-                failures += 1
-                print(f"FAIL {path.name} / {title}: {error}\n     {expr}")
-                continue
-            needs_data = (
-                prefixes
-                and any(prefix in expr for prefix in prefixes)
-                and not any(word in expr for word in OPTIONAL)
-            )
-            if needs_data and not result:
-                failures += 1
-                print(f"EMPTY {path.name} / {title}\n     {expr}")
-        print(f"{path.name}: {count} queries checked")
-    print("FAILED" if failures else f"OK: {total} queries")
+    deadline = time.monotonic() + args.wait
+    while True:
+        rejected, empty, total = run_once(args.prometheus, prefixes)
+        # A rejected query never fixes itself; empty ones may once samples have accumulated.
+        if rejected or not empty or time.monotonic() >= deadline:
+            break
+        print(f"{len(empty)} queries still empty, retrying in 15 s", flush=True)
+        time.sleep(15)
+
+    for message in (*rejected, *empty):
+        print(message)
+    failures = len(rejected) + len(empty)
+    print(f"FAILED: {failures} of {total} queries" if failures else f"OK: {total} queries")
     return 1 if failures else 0
 
 
