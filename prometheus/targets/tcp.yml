@@ -1,0 +1,5 @@
+# TCP services to probe (host:port). 1.1.1.1:443 is a simple "is the internet up" check.
+- targets:
+    - 1.1.1.1:443
+  labels:
+    service: internet

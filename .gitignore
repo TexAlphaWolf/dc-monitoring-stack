@@ -1,0 +1,13 @@
+# Secrets and local data: never publish
+.env
+*.key
+*.pem
+secrets/
+data/
+__pycache__/
+.venv/
+.idea/
+.vscode/
+.ruff_cache/
+
+.desc

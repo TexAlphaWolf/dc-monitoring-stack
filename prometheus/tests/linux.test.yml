@@ -1,0 +1,235 @@
+rule_files:
+  - ../rules/linux.yml
+evaluation_interval: 1m
+
+tests:
+  - name: a healthy host raises nothing
+    interval: 1m
+    input_series:
+      - series: 'up{job="node", instance="n:9100", host="h"}'
+        values: "1x200"
+      - series: 'node_cpu_seconds_total{mode="idle", cpu="0", instance="n:9100", host="h"}'
+        values: "0+50x200"        # 50 s idle per 60 s: 17% busy
+      - series: 'node_memory_MemAvailable_bytes{instance="n:9100", host="h"}'
+        values: "5e9x200"
+      - series: 'node_memory_MemTotal_bytes{instance="n:9100", host="h"}'
+        values: "8e9x200"
+      - series: 'node_filesystem_avail_bytes{fstype="ext4", device="/dev/sda1", mountpoint="/", instance="n:9100", host="h"}'
+        values: "60e9x200"
+      - series: 'node_filesystem_size_bytes{fstype="ext4", device="/dev/sda1", mountpoint="/", instance="n:9100", host="h"}'
+        values: "100e9x200"
+    alert_rule_test:
+      - {eval_time: 120m, alertname: HostDown, exp_alerts: []}
+      - {eval_time: 120m, alertname: HostHighCpu, exp_alerts: []}
+      - {eval_time: 120m, alertname: HostMemoryLow, exp_alerts: []}
+      - {eval_time: 120m, alertname: HostDiskSpaceLow, exp_alerts: []}
+      - {eval_time: 120m, alertname: HostDiskWillFillIn24Hours, exp_alerts: []}
+
+  - name: host down
+    interval: 1m
+    input_series:
+      - series: 'up{job="node", instance="n:9100", host="h"}'
+        values: "1 1 0x10"
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: HostDown
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: HostDown
+        exp_alerts:
+          - exp_labels: {severity: critical, job: node, instance: "n:9100", host: h}
+            exp_annotations:
+              summary: "h is down"
+              description: "node_exporter on h (n:9100) has not answered for 2 minutes."
+
+  - name: sustained high cpu
+    interval: 1m
+    input_series:
+      - series: 'node_cpu_seconds_total{mode="idle", cpu="0", instance="n:9100", host="h"}'
+        values: "0+3x60"          # 3 s idle per minute: 95% busy
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: HostHighCpu
+        exp_alerts: []            # still inside the 15 minute "for"
+      - eval_time: 25m
+        alertname: HostHighCpu
+        exp_alerts:
+          - exp_labels: {severity: warning, instance: "n:9100", host: h}
+            exp_annotations:
+              summary: "High CPU on h"
+              description: "CPU has been above 85% for 15 minutes (now 95%)."
+
+  - name: low memory
+    interval: 1m
+    input_series:
+      - series: 'node_memory_MemAvailable_bytes{instance="n:9100", host="h"}'
+        values: "0.4e9x30"
+      - series: 'node_memory_MemTotal_bytes{instance="n:9100", host="h"}'
+        values: "8e9x30"
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: HostMemoryLow
+        exp_alerts:
+          - exp_labels: {severity: warning, instance: "n:9100", host: h}
+            exp_annotations:
+              summary: "Low memory on h"
+              description: "Only 5% of memory is available."
+
+  - name: disk space low and critical, pseudo filesystems ignored
+    interval: 1m
+    input_series:
+      - series: 'node_filesystem_avail_bytes{fstype="ext4", device="/dev/sda1", mountpoint="/", instance="n:9100", host="h"}'
+        values: "12e9x30"
+      - series: 'node_filesystem_size_bytes{fstype="ext4", device="/dev/sda1", mountpoint="/", instance="n:9100", host="h"}'
+        values: "100e9x30"
+      - series: 'node_filesystem_avail_bytes{fstype="ext4", device="/dev/sdb1", mountpoint="/data", instance="n:9100", host="h"}'
+        values: "2e9x30"
+      - series: 'node_filesystem_size_bytes{fstype="ext4", device="/dev/sdb1", mountpoint="/data", instance="n:9100", host="h"}'
+        values: "100e9x30"
+      - series: 'node_filesystem_avail_bytes{fstype="tmpfs", device="tmpfs", mountpoint="/run", instance="n:9100", host="h"}'
+        values: "0x30"
+      - series: 'node_filesystem_size_bytes{fstype="tmpfs", device="tmpfs", mountpoint="/run", instance="n:9100", host="h"}'
+        values: "1e9x30"
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: HostDiskSpaceLow
+        exp_alerts:
+          - exp_labels: {severity: warning, fstype: ext4, device: /dev/sda1, mountpoint: /, instance: "n:9100", host: h}
+            exp_annotations:
+              summary: "/ on h is 12% free"
+              description: "Less than 15% of / (/dev/sda1) is free."
+          - exp_labels: {severity: warning, fstype: ext4, device: /dev/sdb1, mountpoint: /data, instance: "n:9100", host: h}
+            exp_annotations:
+              summary: "/data on h is 2% free"
+              description: "Less than 15% of /data (/dev/sdb1) is free."
+      - eval_time: 15m
+        alertname: HostDiskSpaceCritical
+        exp_alerts:
+          - exp_labels: {severity: critical, fstype: ext4, device: /dev/sdb1, mountpoint: /data, instance: "n:9100", host: h}
+            exp_annotations:
+              summary: "/data on h is almost full"
+              description: "Less than 5% of /data (/dev/sdb1) is free."
+
+  - name: read-only filesystem
+    interval: 1m
+    input_series:
+      - series: 'node_filesystem_readonly{fstype="ext4", device="/dev/sda1", mountpoint="/", instance="n:9100", host="h"}'
+        values: "0 0 1x10"
+      - series: 'node_filesystem_readonly{fstype="squashfs", device="/dev/loop1", mountpoint="/snap/x", instance="n:9100", host="h"}'
+        values: "1x12"
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: HostFilesystemReadOnly
+        exp_alerts:
+          - exp_labels: {severity: critical, fstype: ext4, device: /dev/sda1, mountpoint: /, instance: "n:9100", host: h}
+            exp_annotations:
+              summary: "/ on h became read-only"
+              description: "A filesystem switched to read-only, usually after a disk error. Check dmesg and SMART data."
+
+  - name: out of memory kill and reboot
+    interval: 1m
+    input_series:
+      - series: 'node_vmstat_oom_kill{instance="n:9100", host="h"}'
+        values: "0 0 0 1 1 1 1"
+      - series: 'node_boot_time_seconds{instance="n:9100", host="h"}'
+        values: "0x20"
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: HostOomKillDetected
+        exp_alerts:
+          - exp_labels: {severity: warning, instance: "n:9100", host: h}
+            exp_annotations:
+              summary: "The kernel killed a process for lack of memory on h"
+              description: "An out-of-memory kill happened in the last 10 minutes."
+      - eval_time: 5m
+        alertname: HostRebooted
+        exp_alerts:
+          - exp_labels: {severity: info, instance: "n:9100", host: h}
+            exp_annotations:
+              summary: "h rebooted"
+              description: "The host has been up for less than 10 minutes."
+
+  - name: swap, load, inodes, network errors and clock
+    interval: 1m
+    input_series:
+      - series: 'node_memory_SwapTotal_bytes{instance="n:9100", host="h"}'
+        values: "1e9x60"
+      - series: 'node_memory_SwapFree_bytes{instance="n:9100", host="h"}'
+        values: "0.1e9x60"
+      - series: 'node_load15{instance="n:9100", host="h"}'
+        values: "9x60"
+      - series: 'node_cpu_seconds_total{mode="idle", cpu="0", instance="n:9100", host="h"}'
+        values: "0+1x60"
+      - series: 'node_cpu_seconds_total{mode="idle", cpu="1", instance="n:9100", host="h"}'
+        values: "0+1x60"
+      - series: 'node_cpu_seconds_total{mode="idle", cpu="2", instance="n:9100", host="h"}'
+        values: "0+1x60"
+      - series: 'node_cpu_seconds_total{mode="idle", cpu="3", instance="n:9100", host="h"}'
+        values: "0+1x60"
+      - series: 'node_filesystem_files_free{fstype="ext4", device="/dev/sda1", mountpoint="/", instance="n:9100", host="h"}'
+        values: "5000x60"
+      - series: 'node_filesystem_files{fstype="ext4", device="/dev/sda1", mountpoint="/", instance="n:9100", host="h"}'
+        values: "100000x60"
+      - series: 'node_network_receive_errs_total{device="eth0", instance="n:9100", host="h"}'
+        values: "0+120x60"        # 2 errors per second
+      - series: 'node_network_transmit_errs_total{device="eth0", instance="n:9100", host="h"}'
+        values: "0x60"
+      - series: 'node_network_receive_errs_total{device="veth123", instance="n:9100", host="h"}'
+        values: "0+600x60"        # container interfaces are ignored
+      - series: 'node_timex_offset_seconds{instance="n:9100", host="h"}'
+        values: "0.2x60"
+      - series: 'node_timex_sync_status{instance="n:9100", host="h"}'
+        values: "1x60"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: HostSwapHeavilyUsed
+        exp_alerts:
+          - exp_labels: {severity: warning, instance: "n:9100", host: h}
+            exp_annotations:
+              summary: "Swap almost full on h"
+              description: "More than 80% of swap has been in use for 15 minutes: the host is short of memory."
+      - eval_time: 40m
+        alertname: HostLoadHigh
+        exp_alerts:
+          - exp_labels: {severity: warning, instance: "n:9100"}
+            exp_annotations:
+              summary: "High load on n:9100"
+              description: "The 15-minute load average is more than twice the number of CPU cores."
+      - eval_time: 15m
+        alertname: HostInodesLow
+        exp_alerts:
+          - exp_labels: {severity: warning, fstype: ext4, device: /dev/sda1, mountpoint: /, instance: "n:9100", host: h}
+            exp_annotations:
+              summary: "Few inodes left on / (h)"
+              description: "Less than 10% of inodes are free on /."
+      - eval_time: 30m
+        alertname: HostNetworkErrors
+        exp_alerts:
+          - exp_labels: {severity: warning, instance: "n:9100", host: h, device: eth0}
+            exp_annotations:
+              summary: "Network errors on eth0 (h)"
+              description: "More than one packet error per second for 15 minutes: check the cable, port and driver."
+      - eval_time: 15m
+        alertname: HostClockSkew
+        exp_alerts:
+          - exp_labels: {severity: warning, instance: "n:9100", host: h}
+            exp_annotations:
+              summary: "Clock offset on h"
+              description: "The clock is 200ms away from its reference."
+
+  - name: a clock that is not synchronised
+    interval: 1m
+    input_series:
+      - series: 'node_timex_sync_status{instance="n:9100", host="h"}'
+        values: "0x60"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: HostClockNotSynchronising
+        exp_alerts: []
+      - eval_time: 40m
+        alertname: HostClockNotSynchronising
+        exp_alerts:
+          - exp_labels: {severity: warning, instance: "n:9100", host: h}
+            exp_annotations:
+              summary: "Clock on h is not synchronised"
+              description: "NTP/chrony is not keeping this clock in sync."

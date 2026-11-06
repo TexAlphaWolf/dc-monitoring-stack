@@ -1,0 +1,101 @@
+rule_files:
+  - ../rules/meta.yml
+evaluation_interval: 1m
+
+tests:
+  - name: watchdog always fires
+    interval: 1m
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: Watchdog
+        exp_alerts:
+          - exp_labels: {severity: none}
+            exp_annotations:
+              summary: "Alerting pipeline heartbeat"
+              description: "This alert always fires. If it stops arriving at the heartbeat receiver, alerting is broken."
+
+  - name: a down scrape target alerts after 5 minutes, hosts have their own alert
+    interval: 1m
+    input_series:
+      - series: 'up{job="cadvisor", instance="cadvisor:8080"}'
+        values: "1 1 0x10"
+      - series: 'up{job="node", instance="node-exporter:9100"}'
+        values: "0x12"
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: TargetDown
+        exp_alerts: []
+      - eval_time: 9m
+        alertname: TargetDown
+        exp_alerts:
+          - exp_labels: {severity: warning, job: cadvisor, instance: "cadvisor:8080"}
+            exp_annotations:
+              summary: "Scrape target cadvisor / cadvisor:8080 is down"
+              description: "Prometheus has not been able to scrape cadvisor:8080 (job cadvisor) for 5 minutes."
+
+  - name: failed reloads are critical
+    interval: 1m
+    input_series:
+      - series: 'prometheus_config_last_reload_successful{job="prometheus"}'
+        values: "1 0x5"
+      - series: 'alertmanager_config_last_reload_successful{job="alertmanager"}'
+        values: "1x5"
+      - series: 'alertmanager_config_last_reload_successful{job="alertmanager-bad"}'
+        values: "1 0x5"
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: PrometheusConfigReloadFailed
+        exp_alerts:
+          - exp_labels: {severity: critical, job: prometheus}
+            exp_annotations:
+              summary: "Prometheus configuration failed to reload"
+              description: "The last reload of prometheus.yml failed: Prometheus keeps running the previous configuration."
+      - eval_time: 4m
+        alertname: AlertmanagerConfigReloadFailed
+        exp_alerts:
+          - exp_labels: {severity: critical, job: alertmanager-bad}
+            exp_annotations:
+              summary: "Alertmanager configuration failed to reload"
+              description: "Alertmanager keeps running the previous configuration."
+
+  - name: undeliverable notifications are reported
+    interval: 1m
+    input_series:
+      - series: 'alertmanager_notifications_failed_total{integration="telegram", job="alertmanager"}'
+        values: "0+1x30"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: AlertmanagerNotificationsFailing
+        exp_alerts:
+          - exp_labels: {severity: warning, integration: telegram}
+            exp_annotations:
+              summary: "Alertmanager cannot deliver telegram notifications"
+              description: "Check the Telegram token and chat id (docker compose logs alertmanager)."
+
+  - name: Prometheus without an Alertmanager
+    interval: 1m
+    input_series:
+      - series: 'prometheus_notifications_alertmanagers_discovered{job="prometheus"}'
+        values: "1 0x10"
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: PrometheusNotConnectedToAlertmanager
+        exp_alerts:
+          - exp_labels: {severity: critical, job: prometheus}
+            exp_annotations:
+              summary: "Prometheus cannot see any Alertmanager"
+              description: "No Alertmanager is discovered, so no alert can be delivered."
+
+  - name: rules that fail to evaluate
+    interval: 1m
+    input_series:
+      - series: 'prometheus_rule_evaluation_failures_total{job="prometheus", rule_group="g"}'
+        values: "0+1x30"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: PrometheusRuleEvaluationFailing
+        exp_alerts:
+          - exp_labels: {severity: warning, job: prometheus, rule_group: g}
+            exp_annotations:
+              summary: "Some alert or recording rules fail to evaluate"
+              description: "10 rule evaluations failed in the last 10 minutes."

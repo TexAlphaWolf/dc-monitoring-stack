@@ -1,0 +1,158 @@
+groups:
+  - name: linux-hosts
+    rules:
+      # Building blocks, also used by the dashboards. They sit in the same group as the alerts and
+      # come first, so an alert always sees the value computed in the same evaluation cycle.
+      # Only real filesystems are considered: pseudo and container overlay filesystems would
+      # make every disk alert noisy.
+      - record: node:filesystem_avail:ratio
+        expr: |
+          node_filesystem_avail_bytes{fstype=~"ext[234]|xfs|btrfs|zfs|vfat|exfat|ntfs3?|fuseblk|f2fs"}
+          / (node_filesystem_size_bytes{fstype=~"ext[234]|xfs|btrfs|zfs|vfat|exfat|ntfs3?|fuseblk|f2fs"} > 0)
+
+      - record: node:cpu_busy:ratio
+        expr: 1 - avg by (instance, host) (rate(node_cpu_seconds_total{mode="idle"}[5m]))
+
+      - record: node:memory_available:ratio
+        expr: node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes
+
+      - alert: HostDown
+        expr: up{job="node"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.host }} is down"
+          description: "node_exporter on {{ $labels.host }} ({{ $labels.instance }}) has not answered for 2 minutes."
+
+      - alert: HostHighCpu
+        expr: node:cpu_busy:ratio > 0.85
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High CPU on {{ $labels.host }}"
+          description: "CPU has been above 85% for 15 minutes (now {{ $value | humanizePercentage }})."
+
+      - alert: HostMemoryLow
+        expr: node:memory_available:ratio < 0.10
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Low memory on {{ $labels.host }}"
+          description: "Only {{ $value | humanizePercentage }} of memory is available."
+
+      - alert: HostSwapHeavilyUsed
+        expr: (node_memory_SwapTotal_bytes > 0) and (1 - node_memory_SwapFree_bytes / node_memory_SwapTotal_bytes > 0.80)
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Swap almost full on {{ $labels.host }}"
+          description: "More than 80% of swap has been in use for 15 minutes: the host is short of memory."
+
+      - alert: HostLoadHigh
+        expr: node_load15 / on (instance) count by (instance) (node_cpu_seconds_total{mode="idle"}) > 2
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High load on {{ $labels.instance }}"
+          description: "The 15-minute load average is more than twice the number of CPU cores."
+
+      - alert: HostDiskSpaceLow
+        expr: node:filesystem_avail:ratio < 0.15
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.mountpoint }} on {{ $labels.host }} is {{ $value | humanizePercentage }} free"
+          description: "Less than 15% of {{ $labels.mountpoint }} ({{ $labels.device }}) is free."
+
+      - alert: HostDiskSpaceCritical
+        expr: node:filesystem_avail:ratio < 0.05
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.mountpoint }} on {{ $labels.host }} is almost full"
+          description: "Less than 5% of {{ $labels.mountpoint }} ({{ $labels.device }}) is free."
+
+      - alert: HostDiskWillFillIn24Hours
+        expr: |
+          (predict_linear(node_filesystem_avail_bytes{fstype=~"ext[234]|xfs|btrfs|zfs|vfat|exfat|ntfs3?|fuseblk|f2fs"}[6h], 24 * 3600) < 0)
+          and on (instance, device, mountpoint) (node:filesystem_avail:ratio < 0.40)
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.mountpoint }} on {{ $labels.host }} will be full within a day"
+          description: "At the rate of the last 6 hours, {{ $labels.mountpoint }} runs out of space in less than 24 hours."
+
+      - alert: HostInodesLow
+        expr: |
+          node_filesystem_files_free{fstype=~"ext[234]|xfs|btrfs|f2fs"}
+          / (node_filesystem_files{fstype=~"ext[234]|xfs|btrfs|f2fs"} > 0) < 0.10
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Few inodes left on {{ $labels.mountpoint }} ({{ $labels.host }})"
+          description: "Less than 10% of inodes are free on {{ $labels.mountpoint }}."
+
+      - alert: HostFilesystemReadOnly
+        expr: node_filesystem_readonly{fstype=~"ext[234]|xfs|btrfs|f2fs"} == 1
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.mountpoint }} on {{ $labels.host }} became read-only"
+          description: "A filesystem switched to read-only, usually after a disk error. Check dmesg and SMART data."
+
+      - alert: HostNetworkErrors
+        expr: |
+          sum by (instance, host, device) (
+            rate(node_network_receive_errs_total{device!~"lo|veth.*|docker.*|br-.*"}[10m])
+            + rate(node_network_transmit_errs_total{device!~"lo|veth.*|docker.*|br-.*"}[10m])
+          ) > 1
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Network errors on {{ $labels.device }} ({{ $labels.host }})"
+          description: "More than one packet error per second for 15 minutes: check the cable, port and driver."
+
+      - alert: HostClockSkew
+        expr: abs(node_timex_offset_seconds) > 0.05 and node_timex_sync_status == 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Clock offset on {{ $labels.host }}"
+          description: "The clock is {{ $value | humanizeDuration }} away from its reference."
+
+      - alert: HostClockNotSynchronising
+        expr: node_timex_sync_status == 0
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Clock on {{ $labels.host }} is not synchronised"
+          description: "NTP/chrony is not keeping this clock in sync."
+
+      - alert: HostOomKillDetected
+        expr: increase(node_vmstat_oom_kill[10m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "The kernel killed a process for lack of memory on {{ $labels.host }}"
+          description: "An out-of-memory kill happened in the last 10 minutes."
+
+      - alert: HostRebooted
+        expr: time() - node_boot_time_seconds < 600
+        labels:
+          severity: info
+        annotations:
+          summary: "{{ $labels.host }} rebooted"
+          description: "The host has been up for less than 10 minutes."

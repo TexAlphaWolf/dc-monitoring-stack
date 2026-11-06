@@ -1,0 +1,38 @@
+groups:
+  - name: probes
+    rules:
+      - alert: EndpointDown
+        expr: probe_success == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.instance }} is not reachable"
+          description: "The {{ $labels.job }} probe of {{ $labels.instance }} has been failing for 2 minutes."
+
+      - alert: EndpointSlow
+        expr: probe_duration_seconds{job="probe-http"} > 2 and probe_success == 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.instance }} answers slowly"
+          description: "The request takes {{ $value | humanizeDuration }}."
+
+      - alert: TlsCertificateExpiresSoon
+        expr: probe_ssl_earliest_cert_expiry - time() < 14 * 86400
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Certificate of {{ $labels.instance }} expires in {{ $value | humanizeDuration }}"
+          description: "Renew the certificate before it expires."
+
+      - alert: TlsCertificateExpiresVerySoon
+        expr: probe_ssl_earliest_cert_expiry - time() < 3 * 86400
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Certificate of {{ $labels.instance }} expires in {{ $value | humanizeDuration }}"
+          description: "Renew the certificate now."

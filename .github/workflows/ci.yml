@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  static:
+    name: configuration, rules, routing, dashboards
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+      - run: pip install pyyaml ruff
+      - run: ruff check tools tests
+      - run: ruff format --check tools tests
+      - name: Compose file is valid
+        run: |
+          printf 'GRAFANA_ADMIN_PASSWORD=x\nTELEGRAM_BOT_TOKEN=x\nTELEGRAM_CHAT_ID=0\n' > .env
+          docker compose config -q
+          docker compose -f docker-compose.yml -f docker-compose.server.yml config -q
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml config -q
+      - name: promtool, amtool, unit tests, dashboards
+        run: bash tools/check.sh
+      - name: Shell scripts
+        run: shellcheck tools/*.sh
+      - name: PowerShell scripts parse
+        shell: pwsh
+        run: |
+          foreach ($file in Get-ChildItem tools/*.ps1) {
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile($file.FullName, [ref]$null, [ref]$errors)
+            if ($errors) { $errors | ForEach-Object { Write-Error "$($file.Name): $_" }; exit 1 }
+          }
+
+  stack:
+    name: docker compose stack end to end
+    runs-on: ubuntu-latest
+    needs: [static]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+      - name: Create .env with throw-away values
+        run: |
+          {
+            echo "GRAFANA_ADMIN_PASSWORD=$(openssl rand -hex 16)"
+            echo "TELEGRAM_BOT_TOKEN=not-used-in-ci"
+            echo "TELEGRAM_CHAT_ID=0"
+          } > .env
+      - name: Start the stack (alerts go to a local webhook instead of Telegram)
+        run: docker compose -f docker-compose.yml -f docker-compose.ci.yml up -d
+      - name: Every job up, rules healthy, Grafana provisioned, alerts delivered
+        run: |
+          set -a; . ./.env; set +a
+          python tools/check_stack.py --webhook http://127.0.0.1:8080 --skip windows
+      - name: Every dashboard query runs and returns data
+        run: python tools/check_dashboards.py --require node,cadvisor,probes
+      - if: failure()
+        run: docker compose -f docker-compose.yml -f docker-compose.ci.yml logs --no-color | tail -200

@@ -1,0 +1,7 @@
+# Web endpoints to probe (HTTP 2xx, latency, TLS certificate expiry for https://).
+- targets:
+    - http://grafana:3000/api/health
+    - http://prometheus:9090/-/healthy
+    - http://alertmanager:9093/-/healthy
+  labels:
+    service: monitoring

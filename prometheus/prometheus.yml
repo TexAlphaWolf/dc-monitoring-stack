@@ -1,0 +1,68 @@
+# Prometheus configuration. Hosts and endpoints live in prometheus/targets/*.yml: edit those
+# files to add machines, Prometheus picks the change up within a minute (no restart needed).
+global:
+  scrape_interval: 30s
+  scrape_timeout: 10s
+  evaluation_interval: 30s
+  external_labels:
+    site: home-rack
+
+rule_files:
+  - /etc/prometheus/rules/*.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  - job_name: alertmanager
+    static_configs:
+      - targets: ["alertmanager:9093"]
+
+  # Linux hosts (node_exporter). Add one entry per machine in targets/linux.yml.
+  - job_name: node
+    file_sd_configs:
+      - files: ["/etc/prometheus/targets/linux.yml"]
+
+  # Windows hosts (windows_exporter). See docs/windows.md.
+  - job_name: windows
+    file_sd_configs:
+      - files: ["/etc/prometheus/targets/windows.yml"]
+
+  # Containers on this Docker host.
+  - job_name: cadvisor
+    static_configs:
+      - targets: ["cadvisor:8080"]
+
+  - job_name: blackbox
+    static_configs:
+      - targets: ["blackbox:9115"]
+
+  # Availability, latency and certificate expiry of web endpoints.
+  - job_name: probe-http
+    metrics_path: /probe
+    params:
+      module: [http_2xx]
+    file_sd_configs:
+      - files: ["/etc/prometheus/targets/http.yml"]
+    relabel_configs: &probe-relabel
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox:9115
+
+  # TCP reachability of services (databases, SSH, DNS...).
+  - job_name: probe-tcp
+    metrics_path: /probe
+    params:
+      module: [tcp_connect]
+    file_sd_configs:
+      - files: ["/etc/prometheus/targets/tcp.yml"]
+    relabel_configs: *probe-relabel

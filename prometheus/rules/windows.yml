@@ -1,0 +1,50 @@
+groups:
+  - name: windows-hosts
+    rules:
+      # Building blocks, also used by the dashboards (first, so alerts see the same cycle).
+      - record: windows:cpu_busy:ratio
+        expr: 1 - avg by (instance, host) (rate(windows_cpu_time_total{mode="idle"}[5m]))
+
+      - record: windows:memory_available:ratio
+        expr: windows_memory_available_bytes / windows_memory_physical_total_bytes
+
+      - record: windows:disk_free:ratio
+        expr: |
+          windows_logical_disk_free_bytes{volume!~"HarddiskVolume.*"}
+          / (windows_logical_disk_size_bytes{volume!~"HarddiskVolume.*"} > 0)
+
+      - alert: WindowsHostDown
+        expr: up{job="windows"} == 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.host }} is not reachable"
+          description: "windows_exporter on {{ $labels.host }} has not answered for 10 minutes. A desktop PC that is switched off or asleep triggers this: silence it or remove the target."
+
+      - alert: WindowsHighCpu
+        expr: windows:cpu_busy:ratio > 0.90
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High CPU on {{ $labels.host }}"
+          description: "CPU has been above 90% for 15 minutes (now {{ $value | humanizePercentage }})."
+
+      - alert: WindowsMemoryLow
+        expr: windows:memory_available:ratio < 0.10
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Low memory on {{ $labels.host }}"
+          description: "Only {{ $value | humanizePercentage }} of physical memory is available."
+
+      - alert: WindowsDiskSpaceLow
+        expr: windows:disk_free:ratio < 0.10
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Drive {{ $labels.volume }} on {{ $labels.host }} is {{ $value | humanizePercentage }} free"
+          description: "Less than 10% of drive {{ $labels.volume }} is free."

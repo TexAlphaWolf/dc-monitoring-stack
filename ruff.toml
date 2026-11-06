@@ -1,0 +1,9 @@
+line-length = 100
+target-version = "py311"
+
+[lint]
+select = ["E", "F", "I", "B", "UP"]
+
+[lint.per-file-ignores]
+# Long PromQL expressions are easier to read unbroken.
+"tools/build_dashboards.py" = ["E501"]

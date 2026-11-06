@@ -1,0 +1,61 @@
+rule_files:
+  - ../rules/windows.yml
+evaluation_interval: 1m
+
+tests:
+  - name: a Windows PC that is switched off alerts only after 10 minutes
+    interval: 1m
+    input_series:
+      - series: 'up{job="windows", instance="host.docker.internal:9182", host="pc"}'
+        values: "1 1 0x20"
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: WindowsHostDown
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: WindowsHostDown
+        exp_alerts:
+          - exp_labels: {severity: warning, job: windows, instance: "host.docker.internal:9182", host: pc}
+            exp_annotations:
+              summary: "pc is not reachable"
+              description: "windows_exporter on pc has not answered for 10 minutes. A desktop PC that is switched off or asleep triggers this: silence it or remove the target."
+
+  - name: cpu, memory and drive alerts
+    interval: 1m
+    input_series:
+      - series: 'windows_cpu_time_total{mode="idle", core="0,0", instance="w:9182", host="pc"}'
+        values: "0+3x60"            # 95% busy
+      - series: 'windows_memory_available_bytes{instance="w:9182", host="pc"}'
+        values: "1e9x60"
+      - series: 'windows_memory_physical_total_bytes{instance="w:9182", host="pc"}'
+        values: "16e9x60"
+      - series: 'windows_logical_disk_free_bytes{volume="C:", instance="w:9182", host="pc"}'
+        values: "30e9x60"
+      - series: 'windows_logical_disk_size_bytes{volume="C:", instance="w:9182", host="pc"}'
+        values: "500e9x60"
+      - series: 'windows_logical_disk_free_bytes{volume="HarddiskVolume1", instance="w:9182", host="pc"}'
+        values: "1e6x60"
+      - series: 'windows_logical_disk_size_bytes{volume="HarddiskVolume1", instance="w:9182", host="pc"}'
+        values: "500e6x60"
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: WindowsHighCpu
+        exp_alerts:
+          - exp_labels: {severity: warning, instance: "w:9182", host: pc}
+            exp_annotations:
+              summary: "High CPU on pc"
+              description: "CPU has been above 90% for 15 minutes (now 95%)."
+      - eval_time: 30m
+        alertname: WindowsMemoryLow
+        exp_alerts:
+          - exp_labels: {severity: warning, instance: "w:9182", host: pc}
+            exp_annotations:
+              summary: "Low memory on pc"
+              description: "Only 6.25% of physical memory is available."
+      - eval_time: 30m
+        alertname: WindowsDiskSpaceLow
+        exp_alerts:               # C: is 6% free; the HarddiskVolume1 recovery partition is ignored
+          - exp_labels: {severity: warning, volume: "C:", instance: "w:9182", host: pc}
+            exp_annotations:
+              summary: "Drive C: on pc is 6% free"
+              description: "Less than 10% of drive C: is free."

@@ -1,0 +1,17 @@
+# CI only: replaces Telegram with a local webhook so the whole alert path can be tested.
+#   docker compose -f docker-compose.yml -f docker-compose.ci.yml up -d
+services:
+  alertmanager:
+    volumes:
+      - ./tests/ci/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+  webhook:
+    image: python:3.14-slim
+    command: ["python", "/srv/webhook.py"]
+    volumes:
+      - ./tests/ci/webhook.py:/srv/webhook.py:ro
+    ports:
+      - "127.0.0.1:8080:8080"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true

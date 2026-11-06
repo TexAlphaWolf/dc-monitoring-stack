@@ -1,0 +1,83 @@
+rule_files:
+  - ../rules/containers.yml
+evaluation_interval: 1m
+
+tests:
+  - name: a container that disappears is reported, one that stays is not
+    interval: 1m
+    input_series:
+      - series: 'container_last_seen{name="web", instance="cadvisor:8080"}'
+        values: "1x10 _x40"
+      - series: 'container_last_seen{name="db", instance="cadvisor:8080"}'
+        values: "1x100"
+      - series: 'container_last_seen{name="", id="/system.slice", instance="cadvisor:8080"}'
+        values: "1x10 _x40"       # not a container: must be ignored
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: ContainerMissing
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: ContainerMissing
+        exp_alerts:
+          - exp_labels: {severity: warning, name: web, instance: "cadvisor:8080"}
+            exp_annotations:
+              summary: "Container web is gone"
+              description: "cAdvisor reported container web during the last hour but not any more."
+      - eval_time: 80m
+        alertname: ContainerMissing
+        exp_alerts: []            # forgotten after an hour
+
+  - name: a restart loop
+    interval: 1m
+    input_series:
+      - series: 'container_start_time_seconds{name="api", instance="cadvisor:8080"}'
+        values: "100 100 200 200 300 300 400 400 400 400 400 400 400 400 400 400 400"
+      - series: 'container_start_time_seconds{name="stable", instance="cadvisor:8080"}'
+        values: "100x16"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: ContainerRestartLoop
+        exp_alerts:
+          - exp_labels: {severity: warning, name: api, instance: "cadvisor:8080"}
+            exp_annotations:
+              summary: "Container api keeps restarting"
+              description: "It restarted 3 times in 15 minutes."
+
+  - name: memory and cpu limits
+    interval: 1m
+    input_series:
+      - series: 'container_memory_working_set_bytes{name="hungry", instance="cadvisor:8080"}'
+        values: "950e6x40"
+      - series: 'container_spec_memory_limit_bytes{name="hungry", instance="cadvisor:8080"}'
+        values: "1e9x40"
+      - series: 'container_memory_working_set_bytes{name="unlimited", instance="cadvisor:8080"}'
+        values: "9e9x40"
+      - series: 'container_spec_memory_limit_bytes{name="unlimited", instance="cadvisor:8080"}'
+        values: "0x40"
+      - series: 'container_cpu_usage_seconds_total{name="hungry", cpu="total", instance="cadvisor:8080"}'
+        values: "0+57x40"         # 0.95 cores
+      - series: 'container_spec_cpu_quota{name="hungry", instance="cadvisor:8080"}'
+        values: "100000x40"
+      - series: 'container_spec_cpu_period{name="hungry", instance="cadvisor:8080"}'
+        values: "100000x40"
+      - series: 'container_cpu_usage_seconds_total{name="unlimited", cpu="total", instance="cadvisor:8080"}'
+        values: "0+300x40"        # 5 cores, but no limit
+      - series: 'container_spec_cpu_quota{name="unlimited", instance="cadvisor:8080"}'
+        values: "0x40"
+      - series: 'container_spec_cpu_period{name="unlimited", instance="cadvisor:8080"}'
+        values: "100000x40"
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: ContainerMemoryNearLimit
+        exp_alerts:
+          - exp_labels: {severity: warning, name: hungry, instance: "cadvisor:8080"}
+            exp_annotations:
+              summary: "Container hungry is close to its memory limit"
+              description: "It uses 95% of its memory limit."
+      - eval_time: 30m
+        alertname: ContainerCpuNearLimit
+        exp_alerts:
+          - exp_labels: {severity: warning, name: hungry, instance: "cadvisor:8080"}
+            exp_annotations:
+              summary: "Container hungry is throttled by its CPU limit"
+              description: "It uses 95% of its CPU limit."

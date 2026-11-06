@@ -1,0 +1,18 @@
+version: 2
+updates:
+  - package-ecosystem: docker-compose
+    directory: /
+    schedule:
+      interval: weekly
+    ignore:
+      # Prometheus: stay on the LTS line. Grafana: move minor versions by hand after testing.
+      - dependency-name: prom/prometheus
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: grafana/grafana
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: python
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

@@ -1,0 +1,65 @@
+groups:
+  - name: monitoring-itself
+    rules:
+      # Always firing on purpose: proves the whole path Prometheus -> Alertmanager is alive.
+      - alert: Watchdog
+        expr: vector(1)
+        labels:
+          severity: none
+        annotations:
+          summary: "Alerting pipeline heartbeat"
+          description: "This alert always fires. If it stops arriving at the heartbeat receiver, alerting is broken."
+
+      - alert: TargetDown
+        expr: up{job!~"node|windows"} == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Scrape target {{ $labels.job }} / {{ $labels.instance }} is down"
+          description: "Prometheus has not been able to scrape {{ $labels.instance }} (job {{ $labels.job }}) for 5 minutes."
+
+      - alert: PrometheusConfigReloadFailed
+        expr: prometheus_config_last_reload_successful == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Prometheus configuration failed to reload"
+          description: "The last reload of prometheus.yml failed: Prometheus keeps running the previous configuration."
+
+      - alert: PrometheusRuleEvaluationFailing
+        expr: increase(prometheus_rule_evaluation_failures_total[10m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Some alert or recording rules fail to evaluate"
+          description: "{{ $value | printf \"%.0f\" }} rule evaluations failed in the last 10 minutes."
+
+      - alert: PrometheusNotConnectedToAlertmanager
+        expr: prometheus_notifications_alertmanagers_discovered < 1
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Prometheus cannot see any Alertmanager"
+          description: "No Alertmanager is discovered, so no alert can be delivered."
+
+      - alert: AlertmanagerNotificationsFailing
+        expr: sum by (integration) (rate(alertmanager_notifications_failed_total[10m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Alertmanager cannot deliver {{ $labels.integration }} notifications"
+          description: "Check the Telegram token and chat id (docker compose logs alertmanager)."
+
+      - alert: AlertmanagerConfigReloadFailed
+        expr: alertmanager_config_last_reload_successful == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Alertmanager configuration failed to reload"
+          description: "Alertmanager keeps running the previous configuration."

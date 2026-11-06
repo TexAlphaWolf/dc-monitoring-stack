@@ -1,0 +1,44 @@
+groups:
+  - name: containers
+    rules:
+      # Seen in the last hour but not reported now. Fires for up to an hour after a container
+      # is stopped or removed; silence it after an intentional change.
+      - alert: ContainerMissing
+        expr: |
+          count by (instance, name) (present_over_time(container_last_seen{name!=""}[1h]))
+          unless
+          count by (instance, name) (container_last_seen{name!=""})
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Container {{ $labels.name }} is gone"
+          description: "cAdvisor reported container {{ $labels.name }} during the last hour but not any more."
+
+      - alert: ContainerRestartLoop
+        expr: changes(container_start_time_seconds{name!=""}[15m]) >= 3
+        labels:
+          severity: warning
+        annotations:
+          summary: "Container {{ $labels.name }} keeps restarting"
+          description: "It restarted {{ $value | printf \"%.0f\" }} times in 15 minutes."
+
+      - alert: ContainerMemoryNearLimit
+        expr: container_memory_working_set_bytes{name!=""} / (container_spec_memory_limit_bytes{name!=""} > 0) > 0.90
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Container {{ $labels.name }} is close to its memory limit"
+          description: "It uses {{ $value | humanizePercentage }} of its memory limit."
+
+      - alert: ContainerCpuNearLimit
+        expr: |
+          sum by (instance, name) (rate(container_cpu_usage_seconds_total{name!=""}[5m]))
+          / (sum by (instance, name) (container_spec_cpu_quota{name!=""} / container_spec_cpu_period{name!=""}) > 0) > 0.90
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Container {{ $labels.name }} is throttled by its CPU limit"
+          description: "It uses {{ $value | humanizePercentage }} of its CPU limit."

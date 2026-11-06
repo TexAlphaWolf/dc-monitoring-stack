@@ -1,0 +1,26 @@
+# Own file: samples are 10 minutes apart, so rules must be evaluated every 10 minutes too
+# (otherwise the 5 minute staleness window makes the series disappear between samples).
+rule_files:
+  - ../rules/linux.yml
+evaluation_interval: 10m
+
+tests:
+  - name: a disk that is filling up is predicted
+    interval: 10m
+    input_series:
+      # Loses 1 GB every 10 minutes from 30 GB free: empty in about 5 hours.
+      - series: 'node_filesystem_avail_bytes{fstype="ext4", device="/dev/sda1", mountpoint="/", instance="n:9100", host="h"}'
+        values: "30000000000-1000000000x40"
+      - series: 'node_filesystem_size_bytes{fstype="ext4", device="/dev/sda1", mountpoint="/", instance="n:9100", host="h"}'
+        values: "100000000000x40"
+    alert_rule_test:
+      - eval_time: 1h
+        alertname: HostDiskWillFillIn24Hours
+        exp_alerts: []            # needs 1 hour of the condition first
+      - eval_time: 3h
+        alertname: HostDiskWillFillIn24Hours
+        exp_alerts:
+          - exp_labels: {severity: warning, fstype: ext4, device: /dev/sda1, mountpoint: /, instance: "n:9100", host: h}
+            exp_annotations:
+              summary: "/ on h will be full within a day"
+              description: "At the rate of the last 6 hours, / runs out of space in less than 24 hours."

@@ -1,0 +1,5 @@
+# Windows machines running windows_exporter (port 9182). From inside Docker Desktop the Windows
+# host is reachable as host.docker.internal. Remove this file's content if you have no Windows host.
+- targets: ["host.docker.internal:9182"]
+  labels:
+    host: windows-pc

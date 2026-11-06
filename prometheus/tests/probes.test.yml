@@ -1,0 +1,67 @@
+rule_files:
+  - ../rules/probes.yml
+evaluation_interval: 1m
+
+tests:
+  - name: an endpoint that stops answering
+    interval: 1m
+    input_series:
+      - series: 'probe_success{job="probe-http", instance="https://example.org"}'
+        values: "1 1 0x10"
+      - series: 'probe_success{job="probe-tcp", instance="1.1.1.1:443"}'
+        values: "1x12"
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: EndpointDown
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: EndpointDown
+        exp_alerts:
+          - exp_labels: {severity: critical, job: probe-http, instance: "https://example.org"}
+            exp_annotations:
+              summary: "https://example.org is not reachable"
+              description: "The probe-http probe of https://example.org has been failing for 2 minutes."
+
+  - name: slow answers and certificate expiry
+    interval: 1m
+    input_series:
+      - series: 'probe_duration_seconds{job="probe-http", instance="https://slow.example"}'
+        values: "3x30"
+      - series: 'probe_success{job="probe-http", instance="https://slow.example"}'
+        values: "1x30"
+      - series: 'probe_duration_seconds{job="probe-tcp", instance="db:5432"}'
+        values: "9x30"            # TCP probes are not judged on latency
+      - series: 'probe_success{job="probe-tcp", instance="db:5432"}'
+        values: "1x30"
+      # Expires 10 days after the start (unix time 0): inside the 14 day warning only.
+      - series: 'probe_ssl_earliest_cert_expiry{job="probe-http", instance="https://soon.example"}'
+        values: "864000x200"
+      # Expires 1 day after the start: inside both windows.
+      - series: 'probe_ssl_earliest_cert_expiry{job="probe-http", instance="https://verysoon.example"}'
+        values: "86400x200"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: EndpointSlow
+        exp_alerts:
+          - exp_labels: {severity: warning, job: probe-http, instance: "https://slow.example"}
+            exp_annotations:
+              summary: "https://slow.example answers slowly"
+              description: "The request takes 3s."
+      - eval_time: 90m
+        alertname: TlsCertificateExpiresSoon
+        exp_alerts:
+          - exp_labels: {severity: warning, job: probe-http, instance: "https://soon.example"}
+            exp_annotations:
+              summary: "Certificate of https://soon.example expires in 9d 22h 30m 0s"
+              description: "Renew the certificate before it expires."
+          - exp_labels: {severity: warning, job: probe-http, instance: "https://verysoon.example"}
+            exp_annotations:
+              summary: "Certificate of https://verysoon.example expires in 22h 30m 0s"
+              description: "Renew the certificate before it expires."
+      - eval_time: 30m
+        alertname: TlsCertificateExpiresVerySoon
+        exp_alerts:
+          - exp_labels: {severity: critical, job: probe-http, instance: "https://verysoon.example"}
+            exp_annotations:
+              summary: "Certificate of https://verysoon.example expires in 23h 30m 0s"
+              description: "Renew the certificate now."

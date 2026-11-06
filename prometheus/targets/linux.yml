@@ -1,0 +1,6 @@
+# Linux hosts running node_exporter. The bundled node-exporter container reports the machine
+# Docker runs on (on Docker Desktop that is the Linux VM, not Windows: see docs/windows.md).
+# Add a block per extra machine; `host` is the name shown in dashboards and alerts.
+- targets: ["node-exporter:9100"]
+  labels:
+    host: docker-host

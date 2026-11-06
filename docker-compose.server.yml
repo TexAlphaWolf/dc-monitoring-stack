@@ -1,0 +1,12 @@
+# Extra settings for a Linux server (not Docker Desktop):
+#   docker compose -f docker-compose.yml -f docker-compose.server.yml up -d
+services:
+  node-exporter:
+    volumes:
+      # rslave lets the exporter see filesystems mounted after it started (extra disks, NAS).
+      - type: bind
+        source: /
+        target: /host
+        read_only: true
+        bind:
+          propagation: rslave
