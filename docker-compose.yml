@@ -100,7 +100,7 @@ services:
 
   grafana:
     <<: *hardening
-    image: grafana/grafana:13.2.5
+    image: grafana/grafana:13.2.6
     read_only: false                 # Grafana writes its database and plugins under /var/lib/grafana
     environment:
       GF_SECURITY_ADMIN_USER: admin
